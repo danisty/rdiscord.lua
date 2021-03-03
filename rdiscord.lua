@@ -339,37 +339,4 @@ addListener("MESSAGE_CREATE", "message", function(data, callback)
     callback(classes.Message(data))
 end)
 
-local client = rdiscord.Client()
-local channel;
-
-client:on("connect", function()
-    warn("Connected")
-end)
-
-client:on("ready", function()
-    warn("Ready!")
-    channel = classes.Channel("723112662954672128")
-end)
-
-client:on("message", function(msg)
-    if msg.content:match("!say") and not msg.author.bot then
-        local message = string.format("%s: %s", msg.author.username, msg.content:sub(6))
-        game.ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
-    end
-end)
-
-local function chatListener(player)
-    player.Chatted:Connect(function(msg)
-        if not channel then return end
-        channel:send(string.format("**%s**: %s", player.Name, msg))
-    end)
-end
-
-game.Players.PlayerAdded:Connect(chatListener)
-for i,v in pairs(game.Players:GetChildren()) do
-    chatListener(v)
-end
-
-client:run("ODA4NzYwNTkxMzk3MTU4OTMy.YCLO_w.mJ2LjaSpt3cdjbAmO6T_e1xbvS8")
-
 return rdiscord
