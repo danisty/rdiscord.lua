@@ -8,6 +8,7 @@ local socket, connected;
 
 --// Services
 local HTTPS = game:GetService("HttpService")
+local TS = game:GetService("TestService")
 
 local function socketSend(data)
     socket:Send(HTTPS:JSONEncode(data))
@@ -33,6 +34,14 @@ local function apiRequest(method, path, data)
     return HTTPS:JSONDecode(req.Body)
 end
 
+local function asyncTrace(f)
+    local thread = coroutine.create(f)
+	local s, e = coroutine.resume(thread)
+	if not s then
+		TS:Error(e .. "\n" .. debug.traceback(thread))
+    end
+end
+
 rdiscord.Client = function(options)
     local client = {}
     client.user = nil
@@ -42,9 +51,9 @@ rdiscord.Client = function(options)
         if not callbacks[event] then return end
         local args = {...}
         for i,cb in pairs(callbacks[event]) do
-            coroutine.wrap(function()
-                cb(unpack(args))
-            end)()
+            asyncTrace(function()
+                cb(unpack(args), "eventCall")
+            end)
         end
     end
 
@@ -101,7 +110,9 @@ rdiscord.Client = function(options)
 
         socket.OnMessage:Connect(function(message)
             local payload = HTTPS:JSONDecode(message)
-            opHandler(payload)
+            asyncTrace(function()
+                opHandler(payload)
+            end)
         end)
 
         socket.OnClose:Connect(function()
@@ -159,13 +170,84 @@ local function cast(list, class)
 end
 
 --// Classes
-createClass("AuditLog", {}, function(data)
-
+createClass("AuditLog", {}, function(self, data)
+    return "nil"
 end)
 
-createClass("User", {}, function(data)
+createClass("Embed", {
+    subclasses = {
+        Author = function(data)
+            return handleClass("EmbedAuthor", {
+                name=data.name,
+                url=data.url,
+                icon_url=data.icon_url
+            }, {})
+        end,
+        Footer = function(data)
+            return handleClass("EmbedFooter", {
+                text=data.text,
+                icon_url=data.icon_url
+            }, {})
+        end,
+        Image = function(data)
+            return handleClass("EmbedImage", {
+                url=data.url,
+                height=data.height,
+                width=data.width
+            }, {})
+        end,
+        Thumbnail = function(data)
+            return handleClass("EmbedThumbnail", {
+                url=data.url,
+                height=data.height,
+                width=data.width
+            }, {})
+        end,
+        Video = function(data)
+            return handleClass("EmbedVideo", {
+                url=data.url,
+                height=data.height,
+                width=data.width
+            }, {})
+        end,
+        Provider = function(data)
+            return handleClass("EmbedImage", {
+                name=data.name,
+                url=data.url
+            }, {})
+        end,
+        Fields = function(data)
+            return handleClass("EmbedFields", {
+                name=data.name,
+                value=data.value,
+                inline=data.inline
+            }, {})
+        end
+    }
+}, function(self, data)
+    local embed = {
+        title=data.title,
+        type=data.type,
+        description=data.description,
+        url=data.url,
+        timestamp=data.timestamp,
+        color=data.color,
+        footer=data.footer and self.subclasses.Footer(data.footer),
+        image=data.image and self.subclasses.Image(data.image),
+        thumbnail=data.thumbnail and self.subclasses.Thumbnail(data.thumbnail),
+        video=data.video and self.subclasses.Video(data.video),
+        provider=data.provider and self.subclasses.Author(data.author),
+        fields=data.fields and self.subclasses.Fields(data.fields)
+    }
+    local methods = {}
+
+    return handleClass("Embed", embed, methods)
+end)
+
+createClass("User", {}, function(self, data)
     if tonumber(data) then
         local user = apiRequest("GET", "/users/" .. data)
+        print(HTTPS:JSONEncode(user))
         return classes.User(user)
     end
 
@@ -173,8 +255,8 @@ createClass("User", {}, function(data)
         id=data.id,
         username=data.username,
         discriminator=data.discriminator,
-        bot=data.bot and true or false,
-        system=data.system and true or false,
+        bot=data.bot,
+        system=data.system,
         verified=data.verified,
         premium_type=data.premium_type,
         public_flags=data.public_flags,
@@ -191,18 +273,18 @@ createClass("Guild", {}, function(data)
     return "nil"
 end)
 
-local channelType = {
-    [0] = "TextChannel",
-    [1] = "DMChannel",
-    [2] = "VoiceChannel",
-    [3] = "DMGroupChannel",
-    [4] = "CategoryChannel",
-    [5] = "NewsChannel",
-    [6] = "StoreChannel"
-}
 createClass("Channel", {
+    type = {
+        [0] = "TextChannel",
+        [1] = "DMChannel",
+        [2] = "VoiceChannel",
+        [3] = "DMGroupChannel",
+        [4] = "CategoryChannel",
+        [5] = "NewsChannel",
+        [6] = "StoreChannel"
+    },
     subclasses = {
-        TextChannel=function(data, channel, methods)
+        TextChannel = function(data, channel, methods)
         end
     }
 }, function(self, data)
@@ -233,14 +315,14 @@ createClass("Channel", {
 
     --// Global methods
     function methods:send(msg, embed, tts)
-        return classes.Message(apiRequest("POST", "/channels/" .. self.id .. "/messages", {
+        return classes.Message(apiRequest("POST", "/channels/" .. channel.id .. "/messages", {
             content=msg,
             tts=tts,
             embed=embed
         }))
     end
 
-    local classname = channelType[data.type] or "Channel"
+    local classname = self.type[data.type] or "Channel"
     if self.subclasses[classname] then self.subclasses[classname](data, channel, methods) end
     local class = handleClass(classname, channel, methods)
     
@@ -255,17 +337,17 @@ createClass("Channel", {
     return class
 end)
 
-local messageType = {
-    [3] = "CallInfoMessage",
-    [6] = "PinnedMessage",
-    [7] = "MemberJoinMessage",
-    [8] = "SubscriptionMessage",
-    [9] = "SubscriptionMessage",
-    [10] = "SubscriptionMessage",
-    [19] = "ReferenceMessage",
-    [20] = "ApplicationMessage"
-}
 createClass("Message", {
+    type = {
+        [3] = "CallInfoMessage",
+        [6] = "PinnedMessage",
+        [7] = "MemberJoinMessage",
+        [8] = "SubscriptionMessage",
+        [9] = "SubscriptionMessage",
+        [10] = "SubscriptionMessage",
+        [19] = "ReferenceMessage",
+        [20] = "ApplicationMessage"
+    },
     subclasses = {
         ReferenceMessage = function(data, message, methods)
             if data.fail_if_not_exists == false then
@@ -295,7 +377,7 @@ createClass("Message", {
         mentions=data.mentions and cast(data.mentions, classes.User),
         mention_channels=data.mention_channels and cast(data.mention_channels, classes.Channel),
         attachments=cast(data.attachments, classes.Attachment), --// class needed
-        embeds=cast(data.embeds, classes.Embed), --// class needed
+        embeds=cast(data.embeds, classes.Embed),
         reactions=data.reactions and cast(data.reactions, classes.Reaction), --// class needed
         pinned=data.pinned,
         webhook_id=data.webhook_id,
@@ -309,9 +391,9 @@ createClass("Message", {
     }
     local methods = {}
 
-    local classname = channelType[data.type] or "Message"
-    if self.subclasses[classname] then self.subclasses[classname](data, channel, methods) end
-    return handleClass(classname, channel, methods)
+    local classname = self.type[data.type] or "Message"
+    if self.subclasses[classname] then self.subclasses[classname](data, message, methods) end
+    return handleClass(classname, message, methods)
 end)
 
 createClass("Mention", {}, function(self, data)
